@@ -78,6 +78,16 @@ export async function recordPayment(db: Db, p: PaymentInput): Promise<{ paymentI
         "select id, invoice_no from payments where method = 'online' and reference = $1", [p.reference]);
       if (dup) return { paymentId: n(dup.id), invoiceNo: dup.invoice_no, duplicate: true };
     }
+    // Offline had no such guard: the same bank reference entered twice for the same member on the same day was
+    // two payments — two months and twice the BV. The same reference on a LATER day is a real second payment
+    // (an admin may well write "CASH" again next month), so only the same day counts as the same money.
+    if (p.method === "offline") {
+      const dup = await maybeOne<{ id: unknown; invoice_no: string | null }>(t,
+        `select id, invoice_no from payments
+         where method = 'offline' and status = 'paid' and member_id = $1 and business_date = $2::date
+           and upper(reference) = upper($3)`, [p.memberId, p.date, p.reference]);
+      if (dup) return { paymentId: n(dup.id), invoiceNo: dup.invoice_no, duplicate: true };
+    }
     const m = await maybeOne<{ status: string; sub_valid_until: string | null; blocked: boolean }>(t,
       "select status, sub_valid_until::text, blocked from members where id = $1 for update", [p.memberId]);
     if (!m) throw new RuleError("Member not found.");
@@ -168,6 +178,15 @@ export async function refundPayment(db: Db, p: { paymentId: number; reason: stri
           }
         }
       }
+    }
+
+    // The Direct Sale Bonus paid as Suite AI credits is queued, not paid at once: a refund before it is pushed
+    // must stop it, or the sponsor keeps the credits for a sale that was undone. (Credits already pushed to the
+    // Suite are left alone — taking them back is the Suite's own call, and they may be spent.)
+    if (ev) {
+      await t.query(
+        `update suite_credit_sync set status = 'done', done_at = now(), last_error = 'cancelled: payment refunded'
+         where ref = $1 and status <> 'done'`, [`direct-${n(ev.id)}`]);
     }
 
     const until = addDays(pay.period_from, -1);

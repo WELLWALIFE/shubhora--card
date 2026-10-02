@@ -329,6 +329,22 @@ describe("₹2,499 plan (Sep 2026)", () => {
     renewalGraceDays: 3, renewalGraceHold: true, lapseStopsNewDays: 0,
   };
 
+  it("a refund stops the credits that were queued for that sale", async () => {
+    const { db, root } = await freshDb(PLAN);
+    const a = await join(db, root.code, "L", { activate: D1 });
+    await runClosing(db, D1);
+    const queued = await db.query<{ ref: string; status: string }>("select ref, status from suite_credit_sync");
+    expect(queued).toHaveLength(1);
+    expect(queued[0].status).toBe("pending");
+
+    const pay = await db.query<{ id: unknown }>("select id from payments where member_id = $1", [a.id]);
+    await refundPayment(db, { paymentId: Number(pay[0].id), reason: "paid twice by mistake", adminId: 1, date: D2 });
+
+    const after = await db.query<{ status: string; last_error: string | null }>("select status, last_error from suite_credit_sync");
+    expect(after[0].status).toBe("done");
+    expect(after[0].last_error).toMatch(/refunded/i);
+  });
+
   it("charges ₹2,499, pays ₹500 on the first 1:1 pair and 21 credits (no cash) per direct sale", async () => {
     const { db, root } = await freshDb(PLAN);
     const a = await join(db, root.code, "L", { activate: D1 });
