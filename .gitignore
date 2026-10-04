@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.data
+# …and the dated copies of it: a .data.bak-* is a 40 MB database, not source.
+.data.bak*
+.env*
+!.env.example
+
+.next-demo
